@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+
+# Personal configuration
+setup.env
+
+# Runtime
+*.pid
+
+# Backend and Frontend projects (if you want to keep them separate)
+backend/
+frontend/
