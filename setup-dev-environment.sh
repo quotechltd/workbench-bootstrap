@@ -573,24 +573,51 @@ clone_uat_database() {
         sleep 5
     fi
 
-    # Dump UAT database
-    info "Dumping UAT database..."
-    local dump_file="/tmp/uat_dump_$(date +%s).sql"
+    # Check for existing dump files
+    local dump_file=""
+    local existing_dumps=$(ls -t /tmp/uat_dump_*.sql 2>/dev/null | head -1)
 
-    if PGPASSWORD="$UAT_DB_PASSWORD" pg_dump \
-        -h "$UAT_DB_HOST" \
-        -p "$UAT_DB_PORT" \
-        -U "$UAT_DB_USER" \
-        -d "$UAT_DB_NAME" \
-        --clean \
-        --if-exists \
-        --no-owner \
-        --no-privileges \
-        -f "$dump_file"; then
-        success "UAT database dumped to $dump_file"
-    else
-        error "Failed to dump UAT database"
-        return 1
+    if [[ -n "$existing_dumps" ]]; then
+        local dump_age=$(stat -f %Sm -t "%Y-%m-%d %H:%M:%S" "$existing_dumps" 2>/dev/null || stat -c %y "$existing_dumps" 2>/dev/null | cut -d'.' -f1)
+        local dump_size=$(du -h "$existing_dumps" | cut -f1)
+
+        echo ""
+        info "Found existing UAT database dump:"
+        echo "  File: $existing_dumps"
+        echo "  Created: $dump_age"
+        echo "  Size: $dump_size"
+        echo ""
+        read -p "Use existing dump? (y/n) " -n 1 -r
+        echo
+
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            dump_file="$existing_dumps"
+            success "Using existing dump file"
+        else
+            info "Will download fresh dump from UAT"
+        fi
+    fi
+
+    # Dump UAT database if no existing dump or user wants fresh one
+    if [[ -z "$dump_file" ]]; then
+        info "Dumping UAT database..."
+        dump_file="/tmp/uat_dump_$(date +%s).sql"
+
+        if PGPASSWORD="$UAT_DB_PASSWORD" pg_dump \
+            -h "$UAT_DB_HOST" \
+            -p "$UAT_DB_PORT" \
+            -U "$UAT_DB_USER" \
+            -d "$UAT_DB_NAME" \
+            --clean \
+            --if-exists \
+            --no-owner \
+            --no-privileges \
+            -f "$dump_file"; then
+            success "UAT database dumped to $dump_file"
+        else
+            error "Failed to dump UAT database"
+            return 1
+        fi
     fi
 
     # Drop and recreate local database
@@ -602,7 +629,7 @@ clone_uat_database() {
     info "Restoring to local database..."
     if docker compose exec -T postgres psql -U workbench_owner -d workbench < "$dump_file"; then
         success "UAT database restored to local environment"
-        rm "$dump_file"
+        info "Dump file saved at: $dump_file (reusable for future runs)"
     else
         error "Failed to restore database"
         warn "Dump file saved at: $dump_file"
