@@ -17,7 +17,6 @@ This repository contains scripts and configuration files to streamline the setup
 ## Prerequisites
 
 - macOS (setup script is macOS-specific)
-- 20GB+ available disk space
 - Administrator access (for installing tools)
 
 ## Quick Start
