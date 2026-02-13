@@ -743,14 +743,24 @@ export_zitadel_data() {
 
     # Export organization (using /me endpoint)
     info "Exporting organization..."
-    local org_response=$(curl -s -w "\n%{http_code}" "${zitadel_url}/management/v1/orgs/me" \
+    log_to_file "Calling: curl ${zitadel_url}/management/v1/orgs/me"
+    local org_response=$(curl -s -w "\n%{http_code}" --max-time 30 --show-error "${zitadel_url}/management/v1/orgs/me" \
         -H "Authorization: Bearer ${access_token}" \
-        -H "Content-Type: application/json")
+        -H "Content-Type: application/json" 2>&1)
+    local curl_exit_code=$?
     local org_http_code=$(echo "$org_response" | tail -n1)
     local org_body=$(echo "$org_response" | sed '$d')
 
+    log_to_file "Organization API curl exit code: ${curl_exit_code}"
     log_to_file "Organization API response code: ${org_http_code}"
-    if [[ "$org_http_code" == "200" ]]; then
+    log_to_file "Organization API response body (first 200 chars): ${org_body:0:200}"
+
+    if [[ "$curl_exit_code" -ne 0 ]]; then
+        error "Failed to connect to Zitadel API (curl error ${curl_exit_code})"
+        log_to_file "Curl error details: ${org_response}"
+        echo "$org_response" > "${output_dir}/organization_curl_error.txt"
+        return 1
+    elif [[ "$org_http_code" == "200" ]]; then
         echo "$org_body" > "${output_dir}/organization.json"
         success "Organization exported ($(echo "$org_body" | jq -r '.org.name' 2>/dev/null || echo 'parsed'))"
     else
@@ -761,15 +771,24 @@ export_zitadel_data() {
 
     # Export users
     info "Exporting users..."
-    local users_response=$(curl -s -w "\n%{http_code}" -X POST "${zitadel_url}/management/v1/users/_search" \
+    log_to_file "Calling: curl POST ${zitadel_url}/management/v1/users/_search"
+    local users_response=$(curl -s -w "\n%{http_code}" --max-time 30 --show-error -X POST "${zitadel_url}/management/v1/users/_search" \
         -H "Authorization: Bearer ${access_token}" \
         -H "Content-Type: application/json" \
-        -d '{"queries":[]}')
+        -d '{"queries":[]}' 2>&1)
+    local curl_exit_code=$?
     local users_http_code=$(echo "$users_response" | tail -n1)
     local users_body=$(echo "$users_response" | sed '$d')
 
+    log_to_file "Users API curl exit code: ${curl_exit_code}"
     log_to_file "Users API response code: ${users_http_code}"
-    if [[ "$users_http_code" == "200" ]]; then
+
+    if [[ "$curl_exit_code" -ne 0 ]]; then
+        error "Failed to connect to Zitadel API (curl error ${curl_exit_code})"
+        log_to_file "Curl error details: ${users_response}"
+        echo "$users_response" > "${output_dir}/users_curl_error.txt"
+        return 1
+    elif [[ "$users_http_code" == "200" ]]; then
         echo "$users_body" > "${output_dir}/users.json"
         local user_count=$(echo "$users_body" | jq -r '.result | length' 2>/dev/null || echo 0)
         success "Users exported (${user_count} users)"
@@ -781,15 +800,24 @@ export_zitadel_data() {
 
     # Export projects
     info "Exporting projects..."
-    local projects_response=$(curl -s -w "\n%{http_code}" -X POST "${zitadel_url}/management/v1/projects/_search" \
+    log_to_file "Calling: curl POST ${zitadel_url}/management/v1/projects/_search"
+    local projects_response=$(curl -s -w "\n%{http_code}" --max-time 30 --show-error -X POST "${zitadel_url}/management/v1/projects/_search" \
         -H "Authorization: Bearer ${access_token}" \
         -H "Content-Type: application/json" \
-        -d '{"queries":[]}')
+        -d '{"queries":[]}' 2>&1)
+    local curl_exit_code=$?
     local projects_http_code=$(echo "$projects_response" | tail -n1)
     local projects_body=$(echo "$projects_response" | sed '$d')
 
+    log_to_file "Projects API curl exit code: ${curl_exit_code}"
     log_to_file "Projects API response code: ${projects_http_code}"
-    if [[ "$projects_http_code" == "200" ]]; then
+
+    if [[ "$curl_exit_code" -ne 0 ]]; then
+        error "Failed to connect to Zitadel API (curl error ${curl_exit_code})"
+        log_to_file "Curl error details: ${projects_response}"
+        echo "$projects_response" > "${output_dir}/projects_curl_error.txt"
+        return 1
+    elif [[ "$projects_http_code" == "200" ]]; then
         echo "$projects_body" > "${output_dir}/projects.json"
         local project_count=$(echo "$projects_body" | jq -r '.result | length' 2>/dev/null || echo 0)
         success "Projects exported (${project_count} projects)"
