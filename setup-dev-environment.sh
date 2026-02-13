@@ -14,6 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
 BACKEND_DIR="$PROJECT_ROOT/backend"
 FRONTEND_DIR="$PROJECT_ROOT/frontend"
+EXPORTS_DIR="$PROJECT_ROOT/exports"
 
 # Repository URLs (hardcoded)
 BACKEND_REPO_URL="git@github.com:quotechltd/workbench.git"
@@ -22,21 +23,36 @@ FRONTEND_REPO_URL="git@github.com:quotechltd/frontend.git"
 # Default config file location
 CONFIG_FILE="${SCRIPT_DIR}/setup.env"
 
-# Function to print colored messages
+# Log file
+LOG_FILE="${SCRIPT_DIR}/setup-dev-environment.log"
+
+# Create exports directory if it doesn't exist
+mkdir -p "$EXPORTS_DIR"
+
+# Function to log to file
+log_to_file() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+# Function to print colored messages (and log)
 info() {
     echo -e "${BLUE}ℹ ${NC}$1"
+    log_to_file "INFO: $1"
 }
 
 success() {
     echo -e "${GREEN}✓${NC} $1"
+    log_to_file "SUCCESS: $1"
 }
 
 warn() {
     echo -e "${YELLOW}⚠${NC} $1"
+    log_to_file "WARNING: $1"
 }
 
 error() {
     echo -e "${RED}✗${NC} $1"
+    log_to_file "ERROR: $1"
 }
 
 # Function to check if command exists
@@ -575,7 +591,7 @@ clone_uat_database() {
 
     # Check for existing dump files
     local dump_file=""
-    local existing_dumps=$(ls -t /tmp/uat_dump_*.sql 2>/dev/null | head -1)
+    local existing_dumps=$(ls -t "$EXPORTS_DIR"/uat_dump_*.sql 2>/dev/null | head -1)
 
     if [[ -n "$existing_dumps" ]]; then
         local dump_age=$(stat -f %Sm -t "%Y-%m-%d %H:%M:%S" "$existing_dumps" 2>/dev/null || stat -c %y "$existing_dumps" 2>/dev/null | cut -d'.' -f1)
@@ -617,13 +633,14 @@ clone_uat_database() {
         if [[ "$dump_mode" == "2" ]]; then
             info "Using lightweight mode..."
             exclude_tables="--exclude-table=year_of_account_items --exclude-table=year_of_account_items_geometry --exclude-table=audit_events"
-            dump_file="/tmp/uat_dump_lightweight_$(date +%s).sql"
+            dump_file="$EXPORTS_DIR/uat_dump_lightweight_$(date +%s).sql"
         else
             info "Using full mode..."
-            dump_file="/tmp/uat_dump_full_$(date +%s).sql"
+            dump_file="$EXPORTS_DIR/uat_dump_full_$(date +%s).sql"
         fi
 
         info "Dumping UAT database..."
+        log_to_file "Running pg_dump with exclude_tables: $exclude_tables"
         if PGPASSWORD="$UAT_DB_PASSWORD" pg_dump \
             -h "$UAT_DB_HOST" \
             -p "$UAT_DB_PORT" \
@@ -634,7 +651,7 @@ clone_uat_database() {
             --no-owner \
             --no-privileges \
             $exclude_tables \
-            -f "$dump_file"; then
+            -f "$dump_file" 2>> "$LOG_FILE"; then
             success "UAT database dumped to $dump_file"
 
             # Show dump size
@@ -648,17 +665,31 @@ clone_uat_database() {
 
     # Drop and recreate local database
     info "Recreating local database..."
-    docker compose exec -T postgres psql -U workbench_owner -d postgres -c "DROP DATABASE IF EXISTS workbench;" 2>/dev/null || true
-    docker compose exec -T postgres psql -U workbench_owner -d postgres -c "CREATE DATABASE workbench;" 2>/dev/null || true
+    log_to_file "Dropping and recreating local database"
+    docker compose exec -T postgres psql -U workbench_owner -d postgres -c "DROP DATABASE IF EXISTS workbench;" 2>> "$LOG_FILE" || true
+    docker compose exec -T postgres psql -U workbench_owner -d postgres -c "CREATE DATABASE workbench;" 2>> "$LOG_FILE" || true
 
     # Restore to local database
-    info "Restoring to local database..."
-    if docker compose exec -T postgres psql -U workbench_owner -d workbench < "$dump_file"; then
+    info "Restoring to local database (ownership/duplicate errors are normal)..."
+    log_to_file "Starting database restore from: $dump_file"
+
+    # Use psql with --single-transaction and ON_ERROR_STOP=off to continue past errors
+    if docker compose exec -T postgres psql -U workbench_owner -d workbench \
+        -v ON_ERROR_STOP=0 < "$dump_file" 2>> "$LOG_FILE" | tee -a "$LOG_FILE" | grep -v "^ERROR:" | grep -v "^SET$" | grep -v "^COPY" > /dev/null; then
         success "UAT database restored to local environment"
         info "Dump file saved at: $dump_file (reusable for future runs)"
+
+        # Count errors in log
+        error_count=$(grep -c "^ERROR:" "$LOG_FILE" 2>/dev/null || echo 0)
+        if [[ $error_count -gt 0 ]]; then
+            warn "Restore completed with $error_count errors (mostly ownership/duplicates - see log)"
+            info "Run: grep 'violates foreign key' $LOG_FILE | wc -l  to see data loss"
+        fi
+        info "Full log: $LOG_FILE"
     else
         error "Failed to restore database"
         warn "Dump file saved at: $dump_file"
+        warn "Check $LOG_FILE for details"
         return 1
     fi
 

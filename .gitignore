@@ -17,6 +17,9 @@ logs/
 # Personal configuration
 setup.env
 
+# Database exports
+exports/
+
 # Runtime
 *.pid
 
