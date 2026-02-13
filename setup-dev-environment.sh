@@ -704,13 +704,14 @@ zitadel_get_token() {
 
     # If service_key looks like a PAT (long alphanumeric), use it directly
     if [[ ${#service_key} -gt 50 ]]; then
-        info "Using Personal Access Token for Zitadel authentication..."
+        log_to_file "Using Personal Access Token for Zitadel authentication (length: ${#service_key})"
+        # Return token via stdout (don't use info/success/error here as they pollute the output)
         echo "$service_key"
         return 0
     fi
 
     # Otherwise, try OAuth client credentials flow
-    info "Authenticating with Zitadel service account via OAuth..."
+    log_to_file "Authenticating with Zitadel service account via OAuth"
 
     local token_response=$(curl -s -X POST "${zitadel_url}/oauth/v2/token" \
         -H "Content-Type: application/x-www-form-urlencoded" \
@@ -721,11 +722,11 @@ zitadel_get_token() {
     local access_token=$(echo "$token_response" | jq -r '.access_token')
 
     if [[ "$access_token" == "null" ]] || [[ -z "$access_token" ]]; then
-        error "Failed to authenticate with Zitadel"
-        error "Response: $token_response"
+        log_to_file "Failed to authenticate with Zitadel: $token_response"
         return 1
     fi
 
+    log_to_file "OAuth authentication successful (token length: ${#access_token})"
     echo "$access_token"
 }
 
@@ -985,6 +986,7 @@ clone_uat_zitadel() {
             log_to_file "Authentication failed - empty or error token"
             return 1
         fi
+        success "Authentication successful (token length: ${#uat_token})"
         log_to_file "Authentication successful (token length: ${#uat_token})"
 
         # Export data from UAT
