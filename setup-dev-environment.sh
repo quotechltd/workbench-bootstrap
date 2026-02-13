@@ -736,30 +736,70 @@ export_zitadel_data() {
     local output_dir=$3
 
     info "Exporting Zitadel data from ${zitadel_url}..."
+    log_to_file "Zitadel URL: ${zitadel_url}"
+    log_to_file "Output dir: ${output_dir}"
 
     mkdir -p "$output_dir"
 
     # Export organization (using /me endpoint)
     info "Exporting organization..."
-    curl -s "${zitadel_url}/management/v1/orgs/me" \
+    local org_response=$(curl -s -w "\n%{http_code}" "${zitadel_url}/management/v1/orgs/me" \
         -H "Authorization: Bearer ${access_token}" \
-        -H "Content-Type: application/json" > "${output_dir}/organization.json"
+        -H "Content-Type: application/json")
+    local org_http_code=$(echo "$org_response" | tail -n1)
+    local org_body=$(echo "$org_response" | sed '$d')
+
+    log_to_file "Organization API response code: ${org_http_code}"
+    if [[ "$org_http_code" == "200" ]]; then
+        echo "$org_body" > "${output_dir}/organization.json"
+        success "Organization exported ($(echo "$org_body" | jq -r '.org.name' 2>/dev/null || echo 'parsed'))"
+    else
+        error "Failed to export organization (HTTP ${org_http_code})"
+        log_to_file "Organization API error: ${org_body}"
+        echo "$org_body" > "${output_dir}/organization_error.json"
+    fi
 
     # Export users
     info "Exporting users..."
-    curl -s -X POST "${zitadel_url}/management/v1/users/_search" \
+    local users_response=$(curl -s -w "\n%{http_code}" -X POST "${zitadel_url}/management/v1/users/_search" \
         -H "Authorization: Bearer ${access_token}" \
         -H "Content-Type: application/json" \
-        -d '{"queries":[]}' > "${output_dir}/users.json"
+        -d '{"queries":[]}')
+    local users_http_code=$(echo "$users_response" | tail -n1)
+    local users_body=$(echo "$users_response" | sed '$d')
+
+    log_to_file "Users API response code: ${users_http_code}"
+    if [[ "$users_http_code" == "200" ]]; then
+        echo "$users_body" > "${output_dir}/users.json"
+        local user_count=$(echo "$users_body" | jq -r '.result | length' 2>/dev/null || echo 0)
+        success "Users exported (${user_count} users)"
+    else
+        error "Failed to export users (HTTP ${users_http_code})"
+        log_to_file "Users API error: ${users_body}"
+        echo "$users_body" > "${output_dir}/users_error.json"
+    fi
 
     # Export projects
     info "Exporting projects..."
-    curl -s -X POST "${zitadel_url}/management/v1/projects/_search" \
+    local projects_response=$(curl -s -w "\n%{http_code}" -X POST "${zitadel_url}/management/v1/projects/_search" \
         -H "Authorization: Bearer ${access_token}" \
         -H "Content-Type: application/json" \
-        -d '{"queries":[]}' > "${output_dir}/projects.json"
+        -d '{"queries":[]}')
+    local projects_http_code=$(echo "$projects_response" | tail -n1)
+    local projects_body=$(echo "$projects_response" | sed '$d')
 
-    success "Zitadel data exported to ${output_dir}"
+    log_to_file "Projects API response code: ${projects_http_code}"
+    if [[ "$projects_http_code" == "200" ]]; then
+        echo "$projects_body" > "${output_dir}/projects.json"
+        local project_count=$(echo "$projects_body" | jq -r '.result | length' 2>/dev/null || echo 0)
+        success "Projects exported (${project_count} projects)"
+    else
+        error "Failed to export projects (HTTP ${projects_http_code})"
+        log_to_file "Projects API error: ${projects_body}"
+        echo "$projects_body" > "${output_dir}/projects_error.json"
+    fi
+
+    success "Zitadel data export completed"
 }
 
 # Function to create test user in local Zitadel
@@ -904,27 +944,46 @@ clone_uat_zitadel() {
             return 1
         fi
 
-        # Create temporary directory for export
-        local export_dir="/tmp/zitadel_export_$(date +%s)"
+        # Create export directory
+        local export_dir="$EXPORTS_DIR/zitadel_export_$(date +%s)"
         mkdir -p "$export_dir"
+        log_to_file "Created Zitadel export directory: $export_dir"
 
         # Get access token for UAT
+        info "Authenticating with UAT Zitadel..."
         local uat_token=$(zitadel_get_token "$UAT_ZITADEL_URL" "$UAT_ZITADEL_SERVICE_USER" "$UAT_ZITADEL_SERVICE_KEY")
-        if [[ $? -ne 0 ]]; then
+        if [[ $? -ne 0 ]] || [[ -z "$uat_token" ]]; then
             error "Failed to authenticate with UAT Zitadel"
+            log_to_file "Authentication failed - empty or error token"
             return 1
         fi
+        log_to_file "Authentication successful (token length: ${#uat_token})"
 
         # Export data from UAT
         export_zitadel_data "$UAT_ZITADEL_URL" "$uat_token" "$export_dir"
 
         # Show exported data summary
-        success "Zitadel data exported successfully!"
         echo ""
-        info "Exported data:"
-        echo "  Organization: $(jq -r '.org.name' ${export_dir}/organization.json 2>/dev/null || echo 'N/A')"
-        echo "  Users: $(jq -r '.result | length' ${export_dir}/users.json 2>/dev/null || echo 'N/A')"
-        echo "  Projects: $(jq -r '.result | length' ${export_dir}/projects.json 2>/dev/null || echo 'N/A')"
+        info "Exported data summary:"
+        if [[ -f "${export_dir}/organization.json" ]] && [[ -s "${export_dir}/organization.json" ]]; then
+            echo "  ✓ Organization: $(jq -r '.org.name' ${export_dir}/organization.json 2>/dev/null || echo 'parsed')"
+        else
+            echo "  ✗ Organization: Failed (check ${export_dir}/organization_error.json)"
+        fi
+
+        if [[ -f "${export_dir}/users.json" ]] && [[ -s "${export_dir}/users.json" ]]; then
+            echo "  ✓ Users: $(jq -r '.result | length' ${export_dir}/users.json 2>/dev/null || echo '0')"
+        else
+            echo "  ✗ Users: Failed (check ${export_dir}/users_error.json)"
+        fi
+
+        if [[ -f "${export_dir}/projects.json" ]] && [[ -s "${export_dir}/projects.json" ]]; then
+            echo "  ✓ Projects: $(jq -r '.result | length' ${export_dir}/projects.json 2>/dev/null || echo '0')"
+        else
+            echo "  ✗ Projects: Failed (check ${export_dir}/projects_error.json)"
+        fi
+        echo ""
+        info "Export location: $export_dir"
         echo ""
 
         # Attempt to import to local Zitadel
