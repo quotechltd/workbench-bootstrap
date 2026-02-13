@@ -612,15 +612,22 @@ clone_uat_database() {
     cd "$PROJECT_ROOT"
 }
 
-# Function to authenticate with Zitadel service account
+# Function to get Zitadel token (supports both PAT and service account)
 zitadel_get_token() {
     local zitadel_url=$1
     local service_user=$2
     local service_key=$3
 
-    info "Authenticating with Zitadel service account..."
+    # If service_key looks like a PAT (long alphanumeric), use it directly
+    if [[ ${#service_key} -gt 50 ]]; then
+        info "Using Personal Access Token for Zitadel authentication..."
+        echo "$service_key"
+        return 0
+    fi
 
-    # Get access token using client credentials flow
+    # Otherwise, try OAuth client credentials flow
+    info "Authenticating with Zitadel service account via OAuth..."
+
     local token_response=$(curl -s -X POST "${zitadel_url}/oauth/v2/token" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "grant_type=client_credentials" \

@@ -205,9 +205,14 @@ Clones data from the UAT environment to your local environment:
    - Provide the exported data and instructions for import
 
 **Zitadel Data Export:**
-- With service account: Automatically exports organizations, users, and projects to JSON files
+- With service account PAT: Automatically exports organizations, users, and projects to JSON files
 - Without service account: Provides manual export/import instructions
 - Import to local Zitadel is currently manual (automatic import coming soon)
+
+**Note:** The service account must have proper permissions:
+- Organization memberships with `ORG_USER_MANAGER` or `ORG_OWNER` role
+- Project grants to access project data
+- Configure these in Zitadel Console > Service Account > Memberships
 
 ## Ports Used
 
