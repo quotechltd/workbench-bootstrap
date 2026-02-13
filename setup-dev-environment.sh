@@ -544,6 +544,212 @@ configure_environment() {
     export FRONTEND_ENV_PATH="$frontend_env_path"
 }
 
+# Function to clone UAT database
+clone_uat_database() {
+    info "Cloning UAT database to local environment..."
+
+    # Validate UAT configuration
+    local required_vars=(
+        "UAT_DB_HOST"
+        "UAT_DB_PORT"
+        "UAT_DB_NAME"
+        "UAT_DB_USER"
+        "UAT_DB_PASSWORD"
+    )
+
+    for var in "${required_vars[@]}"; do
+        if [[ -z "${!var:-}" ]]; then
+            error "Required UAT variable $var is not set in $CONFIG_FILE"
+            error "Please configure UAT database settings to use BOOTSTRAP_MODE=uat"
+            return 1
+        fi
+    done
+
+    # Ensure PostgreSQL container is running
+    cd "$BACKEND_DIR"
+    if ! docker compose ps postgres 2>/dev/null | grep -q "Up\|running"; then
+        info "Starting PostgreSQL container..."
+        docker compose up -d postgres
+        sleep 5
+    fi
+
+    # Dump UAT database
+    info "Dumping UAT database..."
+    local dump_file="/tmp/uat_dump_$(date +%s).sql"
+
+    if PGPASSWORD="$UAT_DB_PASSWORD" pg_dump \
+        -h "$UAT_DB_HOST" \
+        -p "$UAT_DB_PORT" \
+        -U "$UAT_DB_USER" \
+        -d "$UAT_DB_NAME" \
+        --clean \
+        --if-exists \
+        --no-owner \
+        --no-privileges \
+        -f "$dump_file"; then
+        success "UAT database dumped to $dump_file"
+    else
+        error "Failed to dump UAT database"
+        return 1
+    fi
+
+    # Drop and recreate local database
+    info "Recreating local database..."
+    docker compose exec -T postgres psql -U workbench_owner -d postgres -c "DROP DATABASE IF EXISTS workbench;" 2>/dev/null || true
+    docker compose exec -T postgres psql -U workbench_owner -d postgres -c "CREATE DATABASE workbench;" 2>/dev/null || true
+
+    # Restore to local database
+    info "Restoring to local database..."
+    if docker compose exec -T postgres psql -U workbench_owner -d workbench < "$dump_file"; then
+        success "UAT database restored to local environment"
+        rm "$dump_file"
+    else
+        error "Failed to restore database"
+        warn "Dump file saved at: $dump_file"
+        return 1
+    fi
+
+    cd "$PROJECT_ROOT"
+}
+
+# Function to authenticate with Zitadel service account
+zitadel_get_token() {
+    local zitadel_url=$1
+    local service_user=$2
+    local service_key=$3
+
+    info "Authenticating with Zitadel service account..."
+
+    # Get access token using client credentials flow
+    local token_response=$(curl -s -X POST "${zitadel_url}/oauth/v2/token" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=client_credentials" \
+        -d "scope=openid profile email urn:zitadel:iam:org:project:id:zitadel:aud" \
+        -u "${service_user}:${service_key}")
+
+    local access_token=$(echo "$token_response" | jq -r '.access_token')
+
+    if [[ "$access_token" == "null" ]] || [[ -z "$access_token" ]]; then
+        error "Failed to authenticate with Zitadel"
+        error "Response: $token_response"
+        return 1
+    fi
+
+    echo "$access_token"
+}
+
+# Function to export Zitadel data
+export_zitadel_data() {
+    local zitadel_url=$1
+    local access_token=$2
+    local output_dir=$3
+
+    info "Exporting Zitadel data from ${zitadel_url}..."
+
+    mkdir -p "$output_dir"
+
+    # Export organizations
+    info "Exporting organizations..."
+    curl -s -X POST "${zitadel_url}/management/v1/orgs/_search" \
+        -H "Authorization: Bearer ${access_token}" \
+        -H "Content-Type: application/json" \
+        -d '{}' > "${output_dir}/organizations.json"
+
+    # Export users
+    info "Exporting users..."
+    curl -s -X POST "${zitadel_url}/management/v1/users/_search" \
+        -H "Authorization: Bearer ${access_token}" \
+        -H "Content-Type: application/json" \
+        -d '{"queries":[]}' > "${output_dir}/users.json"
+
+    # Export projects
+    info "Exporting projects..."
+    curl -s -X POST "${zitadel_url}/management/v1/projects/_search" \
+        -H "Authorization: Bearer ${access_token}" \
+        -H "Content-Type: application/json" \
+        -d '{"queries":[]}' > "${output_dir}/projects.json"
+
+    success "Zitadel data exported to ${output_dir}"
+}
+
+# Function to clone UAT Zitadel
+clone_uat_zitadel() {
+    info "Cloning UAT Zitadel to local environment..."
+
+    # Check if service account credentials are provided
+    if [[ -n "${UAT_ZITADEL_SERVICE_USER:-}" ]] && [[ -n "${UAT_ZITADEL_SERVICE_KEY:-}" ]]; then
+        info "Using service account authentication"
+
+        # Validate required variables
+        if [[ -z "${UAT_ZITADEL_URL:-}" ]]; then
+            error "UAT_ZITADEL_URL is not set in $CONFIG_FILE"
+            return 1
+        fi
+
+        # Create temporary directory for export
+        local export_dir="/tmp/zitadel_export_$(date +%s)"
+        mkdir -p "$export_dir"
+
+        # Get access token for UAT
+        local uat_token=$(zitadel_get_token "$UAT_ZITADEL_URL" "$UAT_ZITADEL_SERVICE_USER" "$UAT_ZITADEL_SERVICE_KEY")
+        if [[ $? -ne 0 ]]; then
+            error "Failed to authenticate with UAT Zitadel"
+            return 1
+        fi
+
+        # Export data from UAT
+        export_zitadel_data "$UAT_ZITADEL_URL" "$uat_token" "$export_dir"
+
+        # Show exported data summary
+        success "Zitadel data exported successfully!"
+        echo ""
+        info "Exported data:"
+        echo "  Organizations: $(jq -r '.result | length' ${export_dir}/organizations.json 2>/dev/null || echo 'N/A')"
+        echo "  Users: $(jq -r '.result | length' ${export_dir}/users.json 2>/dev/null || echo 'N/A')"
+        echo "  Projects: $(jq -r '.result | length' ${export_dir}/projects.json 2>/dev/null || echo 'N/A')"
+        echo ""
+        warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        warn "  Manual Import Required"
+        warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        warn "Zitadel data has been exported to: ${export_dir}"
+        warn "Automatic import is not yet implemented."
+        echo ""
+        warn "To import to local Zitadel:"
+        echo "  1. Start local Zitadel: cd backend && docker compose up -d zitadel"
+        echo "  2. Access: http://localhost:9010"
+        echo "  3. Use the exported JSON files to recreate resources"
+        echo ""
+        warn "Note: Full automated import/export via Zitadel API is complex."
+        warn "Consider using the Zitadel console for manual export/import."
+        echo ""
+
+    else
+        # Fallback to manual instructions
+        warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        warn "  Manual Zitadel Cloning"
+        warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        warn "No service account credentials found. Manual export/import required."
+        echo ""
+        echo "1. Export from UAT Zitadel:"
+        echo "   - Access: ${UAT_ZITADEL_URL:-https://uat-zitadel.example.com}"
+        echo "   - Login with admin credentials"
+        echo "   - Navigate to Organization > Export"
+        echo "   - Download the export file"
+        echo ""
+        echo "2. Import to local Zitadel:"
+        echo "   - Access: http://localhost:9010"
+        echo "   - Login with local admin credentials"
+        echo "   - Navigate to Organization > Import"
+        echo "   - Upload the export file"
+        echo ""
+        warn "Tip: Configure UAT_ZITADEL_SERVICE_USER and UAT_ZITADEL_SERVICE_KEY"
+        warn "in setup.env for automated data export."
+        echo ""
+    fi
+}
+
 # Function to run bootstrap
 run_bootstrap() {
     if [[ ! -d "$BACKEND_DIR" ]]; then
@@ -551,22 +757,48 @@ run_bootstrap() {
         return 1
     fi
 
-    info "Running bootstrap process..."
-    warn "This will set up the local development environment with Docker containers"
-    warn "It will delete any existing local data and start fresh"
+    # Check bootstrap mode
+    local bootstrap_mode="${BOOTSTRAP_MODE:-local}"
 
-    cd "$BACKEND_DIR"
+    if [[ "$bootstrap_mode" == "uat" ]]; then
+        info "Bootstrap mode: UAT (cloning from UAT environment)"
+        echo ""
+        warn "This will replace your local database and Zitadel with UAT data"
+        read -p "Continue? (y/n) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            info "Bootstrap cancelled"
+            return 0
+        fi
 
-    # Check if Task is available
-    if ! command_exists task; then
-        error "Task command not found. Please ensure go-task is installed."
-        return 1
+        # Clone UAT database
+        clone_uat_database
+
+        # Clone UAT Zitadel (manual process)
+        clone_uat_zitadel
+
+        success "UAT data cloning complete!"
+        warn "Remember to manually export/import Zitadel data as described above"
+
+    else
+        info "Bootstrap mode: Local (creating fresh local data)"
+        warn "This will set up the local development environment with Docker containers"
+        warn "It will delete any existing local data and start fresh"
+
+        cd "$BACKEND_DIR"
+
+        # Check if Task is available
+        if ! command_exists task; then
+            error "Task command not found. Please ensure go-task is installed."
+            return 1
+        fi
+
+        # Run bootstrap (will prompt for confirmation)
+        task bootstrap
+
+        success "Bootstrap complete!"
     fi
 
-    # Run bootstrap (will prompt for confirmation)
-    task bootstrap
-
-    success "Bootstrap complete!"
     cd "$PROJECT_ROOT"
 }
 

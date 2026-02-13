@@ -118,10 +118,16 @@ yarn dev      # or: npm run dev
 
 Personal configuration file for the setup script. Copy from `setup.env.example` and configure:
 
+**Required:**
 - `GIT_USER_NAME` - Your full name for Git commits
 - `GIT_USER_EMAIL` - Your email for Git commits (should match GitHub)
-- `GITHUB_TOKEN` - (Optional) Personal access token for automated GitHub auth
+
+**Optional:**
+- `GITHUB_TOKEN` - Personal access token for automated GitHub auth
 - `USE_PNPM` - Set to "true" to use pnpm instead of npm/yarn
+- `BOOTSTRAP_MODE` - Set to "local" (default) or "uat"
+- `UAT_DB_*` - UAT database connection details (only if BOOTSTRAP_MODE="uat")
+- `UAT_ZITADEL_*` - UAT Zitadel connection details (only if BOOTSTRAP_MODE="uat")
 
 Note: Repository URLs are hardcoded in the setup script.
 
@@ -148,8 +154,11 @@ The setup script installs these tools via Homebrew:
 
 ## Bootstrap Process
 
-The bootstrap process (run automatically during setup) will:
+The bootstrap process (run automatically during setup) has two modes:
 
+### Local Bootstrap (Default)
+
+Creates fresh local data using the bootstrap script:
 1. Initialize PostgreSQL database via Docker Compose
 2. Run database migrations
 3. Set up Zitadel (authentication provider)
@@ -160,6 +169,45 @@ Two seeding methods are available:
 - **API-based** (experimental) - Uses Workbench APIs for validation
 
 See `BOOTSTRAP_API_MIGRATION.md` for details.
+
+### UAT Clone Mode
+
+Clones data from the UAT environment to your local environment:
+
+1. **Configure UAT access** in `setup.env`:
+   ```bash
+   BOOTSTRAP_MODE="uat"
+
+   # UAT Database
+   UAT_DB_HOST="uat-postgres.example.com"
+   UAT_DB_PORT="5432"
+   UAT_DB_NAME="workbench"
+   UAT_DB_USER="workbench_owner"
+   UAT_DB_PASSWORD="your-password"
+
+   # UAT Zitadel
+   UAT_ZITADEL_URL="https://uat-zitadel.example.com"
+   UAT_ZITADEL_ADMIN_USER="admin@example.com"
+   UAT_ZITADEL_ADMIN_PASSWORD="your-password"
+   ```
+
+2. **Configure Zitadel service account** (optional but recommended):
+   ```bash
+   # Service account provides automated data export
+   UAT_ZITADEL_SERVICE_USER="service-account@org.zitadel.cloud"
+   UAT_ZITADEL_SERVICE_KEY="your-service-account-key"
+   ```
+
+3. **Run setup** - The script will:
+   - Dump the UAT PostgreSQL database
+   - Restore it to your local PostgreSQL container
+   - Export Zitadel data using the service account (if configured)
+   - Provide the exported data and instructions for import
+
+**Zitadel Data Export:**
+- With service account: Automatically exports organizations, users, and projects to JSON files
+- Without service account: Provides manual export/import instructions
+- Import to local Zitadel is currently manual (automatic import coming soon)
 
 ## Ports Used
 
