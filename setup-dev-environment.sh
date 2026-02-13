@@ -906,13 +906,125 @@ create_local_test_user() {
     fi
 }
 
+# Function to import UAT users to local Zitadel
+import_users_to_local_zitadel() {
+    local export_dir=$1
+    local local_zitadel_url="http://localhost:9010"
+
+    # Check if local admin token is available
+    if [[ -z "${LOCAL_ZITADEL_ADMIN_TOKEN:-}" ]]; then
+        warn "LOCAL_ZITADEL_ADMIN_TOKEN not set - cannot auto-import users"
+        return 1
+    fi
+
+    # Check if Zitadel is running
+    if ! curl -s "${local_zitadel_url}/ui/console" -o /dev/null 2>&1; then
+        error "Local Zitadel is not running at ${local_zitadel_url}"
+        return 1
+    fi
+
+    local users_file="${export_dir}/users.json"
+    if [[ ! -f "$users_file" ]]; then
+        error "Users file not found: $users_file"
+        return 1
+    fi
+
+    # Extract human users
+    local human_users=$(jq -r '[.result[] | select(.human)] | length' "$users_file")
+    info "Importing ${human_users} human users from UAT to local Zitadel..."
+    log_to_file "Starting user import from: $users_file"
+
+    local success_count=0
+    local skip_count=0
+    local error_count=0
+    local temp_password="${UAT_USER_TEMP_PASSWORD:-TempPassword123!}"
+
+    # Create user ID mapping file
+    local mapping_file="${export_dir}/user_id_mapping.json"
+    echo "{}" > "$mapping_file"
+
+    # Process each human user
+    local users_json=$(jq -c '.result[] | select(.human)' "$users_file")
+
+    while IFS= read -r user; do
+        local uat_user_id=$(echo "$user" | jq -r '.userId')
+        local username=$(echo "$user" | jq -r '.userName')
+        local email=$(echo "$user" | jq -r '.human.email.email // empty')
+        local firstname=$(echo "$user" | jq -r '.human.profile.givenName // "User"')
+        local lastname=$(echo "$user" | jq -r '.human.profile.familyName // "Name"')
+
+        # Skip service accounts and users without email
+        if [[ -z "$email" ]] || [[ "$email" == "null" ]]; then
+            log_to_file "Skipping user $username (no email)"
+            ((skip_count++))
+            continue
+        fi
+
+        log_to_file "Importing user: $username ($email) - UAT ID: $uat_user_id"
+
+        # Import user to local Zitadel
+        local response=$(curl -s -X POST "${local_zitadel_url}/management/v1/users/human/_import" \
+            -H "Authorization: Bearer ${LOCAL_ZITADEL_ADMIN_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"userName\": \"${username}\",
+                \"profile\": {
+                    \"firstName\": \"${firstname}\",
+                    \"lastName\": \"${lastname}\"
+                },
+                \"email\": {
+                    \"email\": \"${email}\",
+                    \"isEmailVerified\": true
+                },
+                \"password\": \"${temp_password}\",
+                \"passwordChangeRequired\": true
+            }")
+
+        if echo "$response" | jq -e '.userId' >/dev/null 2>&1; then
+            local local_user_id=$(echo "$response" | jq -r '.userId')
+            success "  ✓ ${username} → ID: ${local_user_id}"
+            log_to_file "Created user $username: UAT=$uat_user_id → Local=$local_user_id"
+
+            # Save mapping
+            local mapping=$(jq -n --arg uat "$uat_user_id" --arg local "$local_user_id" --arg email "$email" \
+                '{uat_id: $uat, local_id: $local, email: $email}')
+            jq --argjson entry "$mapping" ". + {\"$uat_user_id\": \$entry}" "$mapping_file" > "${mapping_file}.tmp"
+            mv "${mapping_file}.tmp" "$mapping_file"
+
+            ((success_count++))
+        else
+            local error_msg=$(echo "$response" | jq -r '.message // "Unknown error"')
+            warn "  ✗ ${username}: ${error_msg}"
+            log_to_file "Failed to create user $username: $error_msg"
+            ((error_count++))
+        fi
+
+    done <<< "$users_json"
+
+    echo ""
+    success "User import completed!"
+    echo "  ✓ Imported: ${success_count}"
+    echo "  ⊘ Skipped: ${skip_count} (no email)"
+    if [[ $error_count -gt 0 ]]; then
+        echo "  ✗ Failed: ${error_count}"
+    fi
+    echo ""
+    info "Temporary password for all users: ${temp_password}"
+    info "Users must change password on first login"
+    echo ""
+    info "User ID mapping saved to: ${mapping_file}"
+    log_to_file "User import complete: ${success_count} success, ${skip_count} skipped, ${error_count} failed"
+
+    return 0
+}
+
 # Function to provide Zitadel import guidance and create test user
 import_zitadel_data() {
     local export_dir=$1
 
     echo ""
     warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    warn "  Zitadel User Setup"
+    warn "  Zitadel User Import"
     warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 
@@ -922,33 +1034,41 @@ import_zitadel_data() {
     info "Exported ${user_count} total users (${human_count} human users) from UAT"
     echo ""
 
-    info "The workbench application handles user synchronization automatically:"
-    echo "  1. ✅ UAT database cloned → Contains all user data and permissions"
-    echo "  2. 👤 User logs into local workbench"
-    echo "  3. 🔄 Workbench provisions user from Zitadel to database"
-    echo "  4. ✅ Existing database permissions are linked to user"
-    echo ""
+    # Check if we can auto-import
+    if [[ -n "${LOCAL_ZITADEL_ADMIN_TOKEN:-}" ]]; then
+        info "LOCAL_ZITADEL_ADMIN_TOKEN found - can auto-import users"
+        echo ""
+        read -p "Import all UAT users to local Zitadel? (y/n) " -n 1 -r
+        echo
+        echo ""
 
-    # Offer to create test user
-    echo ""
-    info "Creating test user for local development..."
-    echo ""
-    read -p "Create a test user in local Zitadel? (y/n) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        # Use configurable values or defaults
-        local test_email="${TEST_USER_EMAIL:-test.user@local.dev}"
-        local test_password="${TEST_USER_PASSWORD:-TestPassword123!}"
-        local test_firstname="${TEST_USER_FIRSTNAME:-Test}"
-        local test_lastname="${TEST_USER_LASTNAME:-User}"
-
-        create_local_test_user "$test_email" "$test_password" "$test_firstname" "$test_lastname"
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            import_users_to_local_zitadel "$export_dir"
+        else
+            info "Skipping user import"
+        fi
     else
-        info "Skipping test user creation"
+        warn "LOCAL_ZITADEL_ADMIN_TOKEN not set - cannot auto-import users"
         echo ""
-        warn "You can create users manually in Zitadel:"
-        echo "  Access: http://localhost:9010/ui/console"
+        info "To enable auto-import:"
+        echo "  1. Login to local Zitadel: http://localhost:9010/ui/console"
+        echo "  2. Create a service account or generate a PAT"
+        echo "  3. Add LOCAL_ZITADEL_ADMIN_TOKEN to setup.env"
         echo ""
+
+        # Offer to create single test user
+        echo ""
+        read -p "Create a single test user instead? (y/n) " -n 1 -r
+        echo
+        echo ""
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            local test_email="${TEST_USER_EMAIL:-test.user@local.dev}"
+            local test_password="${TEST_USER_PASSWORD:-TestPassword123!}"
+            local test_firstname="${TEST_USER_FIRSTNAME:-Test}"
+            local test_lastname="${TEST_USER_LASTNAME:-User}"
+
+            create_local_test_user "$test_email" "$test_password" "$test_firstname" "$test_lastname"
+        fi
     fi
 
     echo ""
