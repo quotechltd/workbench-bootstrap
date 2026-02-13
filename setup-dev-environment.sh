@@ -600,9 +600,30 @@ clone_uat_database() {
 
     # Dump UAT database if no existing dump or user wants fresh one
     if [[ -z "$dump_file" ]]; then
-        info "Dumping UAT database..."
-        dump_file="/tmp/uat_dump_$(date +%s).sql"
+        # Ask about dump mode
+        echo ""
+        info "UAT Database is ~10 GB (year_of_account_items table is 9.9 GB)"
+        echo ""
+        echo "Choose dump mode:"
+        echo "  1) Full dump - All data (~10 GB, 30-60 min download)"
+        echo "  2) Lightweight - Exclude large tables (~700 MB, 5-10 min download)"
+        echo "     Excludes: year_of_account_items, year_of_account_items_geometry, audit_events"
+        echo "     Keeps: All users, permissions, configurations, and other tables"
+        echo ""
+        read -p "Select mode (1/2) [default: 2]: " dump_mode
+        dump_mode=${dump_mode:-2}
 
+        local exclude_tables=""
+        if [[ "$dump_mode" == "2" ]]; then
+            info "Using lightweight mode..."
+            exclude_tables="--exclude-table=year_of_account_items --exclude-table=year_of_account_items_geometry --exclude-table=audit_events"
+            dump_file="/tmp/uat_dump_lightweight_$(date +%s).sql"
+        else
+            info "Using full mode..."
+            dump_file="/tmp/uat_dump_full_$(date +%s).sql"
+        fi
+
+        info "Dumping UAT database..."
         if PGPASSWORD="$UAT_DB_PASSWORD" pg_dump \
             -h "$UAT_DB_HOST" \
             -p "$UAT_DB_PORT" \
@@ -612,8 +633,13 @@ clone_uat_database() {
             --if-exists \
             --no-owner \
             --no-privileges \
+            $exclude_tables \
             -f "$dump_file"; then
             success "UAT database dumped to $dump_file"
+
+            # Show dump size
+            local dump_size=$(du -h "$dump_file" | cut -f1)
+            info "Dump size: $dump_size"
         else
             error "Failed to dump UAT database"
             return 1
