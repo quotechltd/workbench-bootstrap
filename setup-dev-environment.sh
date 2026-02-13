@@ -655,12 +655,11 @@ export_zitadel_data() {
 
     mkdir -p "$output_dir"
 
-    # Export organizations
-    info "Exporting organizations..."
-    curl -s -X POST "${zitadel_url}/management/v1/orgs/_search" \
+    # Export organization (using /me endpoint)
+    info "Exporting organization..."
+    curl -s "${zitadel_url}/management/v1/orgs/me" \
         -H "Authorization: Bearer ${access_token}" \
-        -H "Content-Type: application/json" \
-        -d '{}' > "${output_dir}/organizations.json"
+        -H "Content-Type: application/json" > "${output_dir}/organization.json"
 
     # Export users
     info "Exporting users..."
@@ -711,7 +710,7 @@ clone_uat_zitadel() {
         success "Zitadel data exported successfully!"
         echo ""
         info "Exported data:"
-        echo "  Organizations: $(jq -r '.result | length' ${export_dir}/organizations.json 2>/dev/null || echo 'N/A')"
+        echo "  Organization: $(jq -r '.org.name' ${export_dir}/organization.json 2>/dev/null || echo 'N/A')"
         echo "  Users: $(jq -r '.result | length' ${export_dir}/users.json 2>/dev/null || echo 'N/A')"
         echo "  Projects: $(jq -r '.result | length' ${export_dir}/projects.json 2>/dev/null || echo 'N/A')"
         echo ""
