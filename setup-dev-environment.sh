@@ -678,41 +678,131 @@ export_zitadel_data() {
     success "Zitadel data exported to ${output_dir}"
 }
 
-# Function to provide Zitadel import guidance
+# Function to create test user in local Zitadel
+create_local_test_user() {
+    local local_zitadel_url="http://localhost:9010"
+    local test_email="${1:-test.user@local.dev}"
+    local test_password="${2:-TestPassword123!}"
+    local test_firstname="${3:-Test}"
+    local test_lastname="${4:-User}"
+
+    info "Creating test user in local Zitadel..."
+
+    # Check if local Zitadel is running
+    if ! curl -s "${local_zitadel_url}/ui/console" -o /dev/null 2>&1; then
+        error "Local Zitadel is not running at ${local_zitadel_url}"
+        error "Please start it first: cd backend && docker compose up -d zitadel"
+        return 1
+    fi
+
+    # Check if we have local admin credentials
+    if [[ -z "${LOCAL_ZITADEL_ADMIN_TOKEN:-}" ]]; then
+        warn "LOCAL_ZITADEL_ADMIN_TOKEN not set in setup.env"
+        echo ""
+        info "To automatically create test users, you need:"
+        echo "  1. Login to local Zitadel: ${local_zitadel_url}/ui/console"
+        echo "  2. Use bootstrap admin credentials"
+        echo "  3. Create a service account or generate a PAT"
+        echo "  4. Add LOCAL_ZITADEL_ADMIN_TOKEN to setup.env"
+        echo ""
+        info "Manual user creation:"
+        echo "  1. Access: ${local_zitadel_url}/ui/console"
+        echo "  2. Go to Users > New"
+        echo "  3. Create user with:"
+        echo "     Email: ${test_email}"
+        echo "     Password: ${test_password}"
+        echo "     First Name: ${test_firstname}"
+        echo "     Last Name: ${test_lastname}"
+        echo "  4. Assign roles/permissions as needed"
+        echo ""
+        return 1
+    fi
+
+    # Create user via API
+    info "Creating user: ${test_email}"
+    local response=$(curl -s -X POST "${local_zitadel_url}/management/v1/users/human/_import" \
+        -H "Authorization: Bearer ${LOCAL_ZITADEL_ADMIN_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"userName\": \"${test_email}\",
+            \"profile\": {
+                \"firstName\": \"${test_firstname}\",
+                \"lastName\": \"${test_lastname}\"
+            },
+            \"email\": {
+                \"email\": \"${test_email}\",
+                \"isEmailVerified\": true
+            },
+            \"password\": \"${test_password}\",
+            \"passwordChangeRequired\": false
+        }")
+
+    if echo "$response" | jq -e '.userId' >/dev/null 2>&1; then
+        local user_id=$(echo "$response" | jq -r '.userId')
+        success "Test user created successfully!"
+        echo "  Email: ${test_email}"
+        echo "  Password: ${test_password}"
+        echo "  User ID: ${user_id}"
+        echo ""
+        info "User will be auto-provisioned to database on first login"
+        return 0
+    else
+        error "Failed to create test user"
+        echo "Response: $response"
+        return 1
+    fi
+}
+
+# Function to provide Zitadel import guidance and create test user
 import_zitadel_data() {
     local export_dir=$1
 
     echo ""
     warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    warn "  Zitadel User Data"
+    warn "  Zitadel User Setup"
     warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 
     local user_count=$(jq -r '.result | length' "${export_dir}/users.json" 2>/dev/null || echo "0")
     local human_count=$(jq -r '[.result[] | select(.human)] | length' "${export_dir}/users.json" 2>/dev/null || echo "0")
 
-    info "Exported ${user_count} total users (${human_count} human users)"
+    info "Exported ${user_count} total users (${human_count} human users) from UAT"
     echo ""
 
-    success "Good news: You don't need to manually import Zitadel users!"
-    echo ""
     info "The workbench application handles user synchronization automatically:"
-    echo "  1. UAT database cloned → Contains user data and permissions"
-    echo "  2. Users login to local workbench with their credentials"
-    echo "  3. Workbench provisions users from Zitadel to database on first login"
-    echo "  4. Existing user data in database is preserved"
+    echo "  1. ✅ UAT database cloned → Contains all user data and permissions"
+    echo "  2. 👤 User logs into local workbench"
+    echo "  3. 🔄 Workbench provisions user from Zitadel to database"
+    echo "  4. ✅ Existing database permissions are linked to user"
     echo ""
 
+    # Offer to create test user
+    echo ""
+    info "Creating test user for local development..."
+    echo ""
+    read -p "Create a test user in local Zitadel? (y/n) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        # Use configurable values or defaults
+        local test_email="${TEST_USER_EMAIL:-test.user@local.dev}"
+        local test_password="${TEST_USER_PASSWORD:-TestPassword123!}"
+        local test_firstname="${TEST_USER_FIRSTNAME:-Test}"
+        local test_lastname="${TEST_USER_LASTNAME:-User}"
+
+        create_local_test_user "$test_email" "$test_password" "$test_firstname" "$test_lastname"
+    else
+        info "Skipping test user creation"
+        echo ""
+        warn "You can create users manually in Zitadel:"
+        echo "  Access: http://localhost:9010/ui/console"
+        echo ""
+    fi
+
+    echo ""
     info "User data reference exported to:"
     echo "  • Organization: ${export_dir}/organization.json"
-    echo "  • Users: ${export_dir}/users.json"
+    echo "  • Users: ${export_dir}/users.json (${human_count} human users)"
     echo "  • Projects: ${export_dir}/projects.json"
-    echo ""
-
-    warn "Note: For testing, you may want to:"
-    echo "  1. Use UAT Zitadel URL in your local .env for authentication"
-    echo "  2. Or manually create a few test users in local Zitadel"
-    echo "  3. The database already has all user permissions and data"
     echo ""
 }
 

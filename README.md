@@ -216,10 +216,19 @@ The workbench application automatically handles user provisioning:
 3. **Auto-provisioned** - Workbench provisions users from Zitadel to database automatically
 4. **Data preserved** - Existing database user data is maintained
 
-**Options for testing:**
-- **Option 1** (Recommended): Point your local environment to UAT Zitadel for authentication
-- **Option 2**: Manually create test users in local Zitadel as needed
-- The database already contains all user permissions and organizational data
+**Test User Creation:**
+The setup script can automatically create a test user in local Zitadel:
+- Prompted during UAT cloning process
+- Creates user with email verification enabled
+- Configurable via `setup.env` (email, password, name)
+- User will be auto-provisioned to database on first login
+- Database already has all permissions and organizational data
+
+**Manual test user creation:**
+If you prefer manual setup:
+1. Access http://localhost:9010/ui/console
+2. Create user with verified email
+3. User will sync to database on first login
 
 **Note:** The service account must have proper permissions:
 - Organization memberships with `ORG_USER_MANAGER` or `ORG_OWNER` role
