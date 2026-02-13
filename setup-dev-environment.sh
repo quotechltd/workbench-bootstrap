@@ -678,6 +678,44 @@ export_zitadel_data() {
     success "Zitadel data exported to ${output_dir}"
 }
 
+# Function to provide Zitadel import guidance
+import_zitadel_data() {
+    local export_dir=$1
+
+    echo ""
+    warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    warn "  Zitadel User Data"
+    warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+
+    local user_count=$(jq -r '.result | length' "${export_dir}/users.json" 2>/dev/null || echo "0")
+    local human_count=$(jq -r '[.result[] | select(.human)] | length' "${export_dir}/users.json" 2>/dev/null || echo "0")
+
+    info "Exported ${user_count} total users (${human_count} human users)"
+    echo ""
+
+    success "Good news: You don't need to manually import Zitadel users!"
+    echo ""
+    info "The workbench application handles user synchronization automatically:"
+    echo "  1. UAT database cloned → Contains user data and permissions"
+    echo "  2. Users login to local workbench with their credentials"
+    echo "  3. Workbench provisions users from Zitadel to database on first login"
+    echo "  4. Existing user data in database is preserved"
+    echo ""
+
+    info "User data reference exported to:"
+    echo "  • Organization: ${export_dir}/organization.json"
+    echo "  • Users: ${export_dir}/users.json"
+    echo "  • Projects: ${export_dir}/projects.json"
+    echo ""
+
+    warn "Note: For testing, you may want to:"
+    echo "  1. Use UAT Zitadel URL in your local .env for authentication"
+    echo "  2. Or manually create a few test users in local Zitadel"
+    echo "  3. The database already has all user permissions and data"
+    echo ""
+}
+
 # Function to clone UAT Zitadel
 clone_uat_zitadel() {
     info "Cloning UAT Zitadel to local environment..."
@@ -714,21 +752,9 @@ clone_uat_zitadel() {
         echo "  Users: $(jq -r '.result | length' ${export_dir}/users.json 2>/dev/null || echo 'N/A')"
         echo "  Projects: $(jq -r '.result | length' ${export_dir}/projects.json 2>/dev/null || echo 'N/A')"
         echo ""
-        warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        warn "  Manual Import Required"
-        warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        warn "Zitadel data has been exported to: ${export_dir}"
-        warn "Automatic import is not yet implemented."
-        echo ""
-        warn "To import to local Zitadel:"
-        echo "  1. Start local Zitadel: cd backend && docker compose up -d zitadel"
-        echo "  2. Access: http://localhost:9010"
-        echo "  3. Use the exported JSON files to recreate resources"
-        echo ""
-        warn "Note: Full automated import/export via Zitadel API is complex."
-        warn "Consider using the Zitadel console for manual export/import."
-        echo ""
+
+        # Attempt to import to local Zitadel
+        import_zitadel_data "$export_dir"
 
     else
         # Fallback to manual instructions

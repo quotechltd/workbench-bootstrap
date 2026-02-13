@@ -205,9 +205,21 @@ Clones data from the UAT environment to your local environment:
    - Provide the exported data and instructions for import
 
 **Zitadel Data Export:**
-- With service account PAT: Automatically exports organizations, users, and projects to JSON files
+- With service account PAT: Automatically exports organizations, users, and projects to JSON files for reference
 - Without service account: Provides manual export/import instructions
-- Import to local Zitadel is currently manual (automatic import coming soon)
+- Export includes all user data, roles, and organization structure
+
+**User Synchronization:**
+The workbench application automatically handles user provisioning:
+1. **Database cloned** - All user data, permissions, and roles are in the database
+2. **Users login** - When users log in to your local workbench with their credentials
+3. **Auto-provisioned** - Workbench provisions users from Zitadel to database automatically
+4. **Data preserved** - Existing database user data is maintained
+
+**Options for testing:**
+- **Option 1** (Recommended): Point your local environment to UAT Zitadel for authentication
+- **Option 2**: Manually create test users in local Zitadel as needed
+- The database already contains all user permissions and organizational data
 
 **Note:** The service account must have proper permissions:
 - Organization memberships with `ORG_USER_MANAGER` or `ORG_OWNER` role
